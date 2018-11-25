@@ -1,0 +1,158 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import jieba
+import re
+from random import shuffle
+from nltk.collocations import BigramCollocationFinder
+from nltk.metrics import BigramAssocMeasures
+from nltk.probability import FreqDist, ConditionalFreqDist
+
+#df存储读取文件数据
+df = pd.read_csv('train.csv')
+#sub_list存储情感分类主题，共10类
+sub_list = list(df['subject'].unique())
+
+#sub_cnt_dict存储每一类对应的所有中文文本
+sub_word_dict = dict(zip(sub_list, ['']*10))
+
+#将文本中的中文提取出来
+def Translate(str):
+    pat = re.compile(u"[^\\u4e00-\\u9fa5]")
+    result = ''.join(pat.split(str))
+    return result
+
+for item in sub_list:
+    temp_content = ''.join(list(df[df['subject']==item]['content']))
+    #jieba.cut 进行结巴分词工具分词
+    sub_word_dict[item] = list(jieba.cut(Translate(temp_content),cut_all = False))
+    
+#print(sub_word_dict['价格'][:10])
+#计算分词的卡方统计量，然后选取最高的number个
+def Jieba_feature(sub_word_dict,number):
+    #可统计所有词的词频
+    word_fd = FreqDist()
+    #可统计每个主题的词频
+    con_word_fd = ConditionalFreqDist()
+    #存储每个类别的word的总词数
+    con_word_count = {}
+    
+    for sub in sub_word_dict.keys():
+        for word in sub_word_dict[sub]:
+            word_fd[word] += 1
+            con_word_fd[sub][word] += 1
+        temp_num = con_word_fd[sub].N()
+        con_word_count[sub] = con_word_count.get(sub, temp_num)
+    total_word_count = sum(con_word_count.values())
+    
+    word_scores = {} #存储每个词对应的信息量
+    
+    for word, fred in word_fd.items():
+        word_scores[word] = 0
+        for sub in sub_word_dict.keys():
+            temp_num = BigramAssocMeasures.chi_sq(con_word_fd[sub][word], 
+                        (fred,con_word_fd[sub].N()),
+                        total_word_count)
+            word_scores[word] += temp_num
+    
+    #把词按信息量进行排序，然后去前number个
+    best_vals = sorted(word_scores.items(), 
+                       key=lambda item:item[1],
+                       reverse = True)[:number]
+    best_words = set([w for w,s in best_vals])
+    return list(best_words)
+    
+#print(Jieba_feature(sub_word_dict, 1000))
+
+#word_list 存储我们所取的作为特征的词
+word_list = Jieba_feature(sub_word_dict, 200)
+
+#将数据集转换为特征数据和分类数据
+def GetData(df, word_list,sub_list):
+    train_list = []
+    for index in range(df.shape[0]):
+        temp_list = []
+        word_vec = [0]*len(word_list)
+        
+        content = df['content'][index]
+        subject = df['subject'][index]
+        
+        fen_ci = list(jieba.cut(Translate(content),cut_all = False))
+        
+        for word in fen_ci:
+            if word in word_list:
+                word_vec[word_list.index(word)] += 1    #计算频数
+                
+        temp_list.append(word_vec)
+        temp_list.append(sub_list.index(subject))
+        train_list.append(temp_list)
+    return train_list
+
+#获取可计算的数据集
+data = GetData(df, word_list, sub_list)
+
+#print(data[0])
+
+#打乱数据，然后将数据分为train and test
+shuffle(data)
+train_data = data[:6947]   #6947 条训练数据
+test_data = data[6947:]    #3000 条测试数据
+
+#计算训练集当中单词集中，每个词出现的概率 和每一类主题出现的概率
+#朴素贝叶斯分类器训练函数
+def TrainNB0(train_data):
+    data_x, data_y = zip(*train_data)
+    #将数据转化为矩阵类型
+    data_x = np.array(data_x)
+    data_y = np.array(data_y)
+    
+    #存储每个分类中词集中词的出现概率
+    pNum = [np.ones(len(data_x[0]))]*10
+    #存储每个分类词集中的词出现的总次数
+    pDenom = [2.0]*10
+    num = data_x.shape[0]  #数据的数量
+    
+    for i in range(num):
+        index = data_y[i]
+        pNum[index] += data_x[i]
+        pDenom[index] += sum(data_x[i])
+    
+    for i in range(10):
+        pNum[i] = np.log(pNum[i] / pDenom[i])
+    
+    pAbusive = []
+    for i in range(10):
+        pAbusive.append(sum(data_y == i))
+    pAbusive = np.array(pAbusive) / float(num)
+    
+    #返回结果都是matrix
+    return np.array(pNum), pAbusive
+
+
+#p_vec, p_ab = TrainNB0(train_data)
+
+#朴素贝叶斯分类函数
+def ClassifyNB(test_vec):
+    p_vec, p_ab = TrainNB0(train_data)
+    p = []
+    for i in range(10):
+        p.append(sum(np.array(test_vec) * p_vec[i]) + np.log(p_ab[i]))
+    return p.index(max(p))
+
+
+#测试
+test_x,test_y = zip(*test_data)
+test_x = np.array(test_x)
+test_y = np.array(test_y)
+
+pre_y = []
+for i in range(test_x.shape[0]):
+    pre_y.append(ClassifyNB(test_x[i]))
+
+pre_y = np.array(pre_y)
+print('accuracy: ', sum(pre_y == test_y) / test_x.shape[0])
+
+
+        
+    
+
