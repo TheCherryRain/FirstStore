@@ -10,6 +10,7 @@ from nltk.probability import FreqDist, ConditionalFreqDist
 
 #df存储读取文件数据
 df = pd.read_csv('train.csv')
+
 #sub_list存储情感分类主题，共10类
 sub_list = list(df['subject'].unique())
 
@@ -60,19 +61,19 @@ def Jieba_feature(sub_word_dict,number):
                        key=lambda item:item[1],
                        reverse = True)[:number]
     best_words = set([w for w,s in best_vals])
-    return list(best_words)
+    return dict([(word,True) for word in best_words])
     
-#print(Jieba_feature(sub_word_dict, 1000))
+#print(Jieba_feature(sub_word_dict, 10000))
 
 #word_list 存储我们所取的作为特征的词
-word_list = Jieba_feature(sub_word_dict, 200)
+word_list = Jieba_feature(sub_word_dict, 1000)
 
 #将数据集转换为特征数据和分类数据
 def GetData(df, word_list,sub_list):
     train_list = []
     for index in range(df.shape[0]):
         temp_list = []
-        word_vec = [0]*len(word_list)
+        word_vec = {}
         
         content = df['content'][index]
         subject = df['subject'][index]
@@ -81,78 +82,110 @@ def GetData(df, word_list,sub_list):
         
         for word in fen_ci:
             if word in word_list:
-                word_vec[word_list.index(word)] += 1    #计算频数
+                word_vec[word] = 'True'
                 
         temp_list.append(word_vec)
-        temp_list.append(sub_list.index(subject))
+        try:
+            temp_list.append(sub_list.index(subject))
+        except BaseException as e:
+            temp_list.append(10)   #表示subject是一个空值，
         train_list.append(temp_list)
     return train_list
 
+
+def GetValueData(data, df):    
+    data2 = data.copy()
+    for i in range(len(df['content_id'])):
+        data2[i][1] = df['sentiment_value'][i]
+    return data2
+
 #获取可计算的数据集
 data = GetData(df, word_list, sub_list)
+#data2 = GetValueData(data, df) #有问题，运行之后，data  和data2 变成相同的了
 
-#print(data[0])
-
+#print(data2[0])
+#shuffle(data)
+#print(data2[0])
 #打乱数据，然后将数据分为train and test
+#shuffle(data)
+#train_data = data[:6947]   #6947 条训练数据
+#test_data = data[6947:]    #3000 条测试数据
+##test_x, test_y = zip(*test_data)  #分离测试集的数据和标签
+
+import sklearn
+from nltk.classify.scikitlearn import SklearnClassifier
+from sklearn.svm import SVC, LinearSVC
+from sklearn.naive_bayes import MultinomialNB, BernoulliNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+
+def Score(classifier, train_data, test_data):
+    test_x, test_y = zip(*test_data)
+    classifier = SklearnClassifier(classifier)
+    classifier.train(train_data) #训练分类器
+    pred = classifier.classify_many(test_x) #给出预测结果
+    
+    test_y = np.array(test_y)
+    pred = np.array(pred)
+    return sum(pred == test_y) / len(test_y)
+
 shuffle(data)
 train_data = data[:6947]   #6947 条训练数据
-test_data = data[6947:]    #3000 条测试数据
+test_data = data[6947:] 
 
-#计算训练集当中单词集中，每个词出现的概率 和每一类主题出现的概率
-#朴素贝叶斯分类器训练函数
-def TrainNB0(train_data):
-    data_x, data_y = zip(*train_data)
-    #将数据转化为矩阵类型
-    data_x = np.array(data_x)
-    data_y = np.array(data_y)
-    
-    #存储每个分类中词集中词的出现概率
-    pNum = [np.ones(len(data_x[0]))]*10
-    #存储每个分类词集中的词出现的总次数
-    pDenom = [2.0]*10
-    num = data_x.shape[0]  #数据的数量
-    
-    for i in range(num):
-        index = data_y[i]
-        pNum[index] += data_x[i]
-        pDenom[index] += sum(data_x[i])
-    
-    for i in range(10):
-        pNum[i] = np.log(pNum[i] / pDenom[i])
-    
-    pAbusive = []
-    for i in range(10):
-        pAbusive.append(sum(data_y == i))
-    pAbusive = np.array(pAbusive) / float(num)
-    
-    #返回结果都是matrix
-    return np.array(pNum), pAbusive
+print('--------------------------subject-----------------------')
+print('BernoulliNB`s accuracy is %f'  %Score(BernoulliNB(), train_data, test_data))
+print('MultinomiaNB`s accuracy is %f'  %Score(MultinomialNB(), train_data, test_data))
+print('LogisticRegression`s accuracy is  %f' %Score(LogisticRegression(), train_data, test_data))
+print('SVC`s accuracy is %f'  %Score(SVC(), train_data, test_data))
+print('LinearSVC`s accuracy is %f'  %Score(LinearSVC(), train_data, test_data))
 
 
-#p_vec, p_ab = TrainNB0(train_data)
-
-#朴素贝叶斯分类函数
-def ClassifyNB(test_vec):
-    p_vec, p_ab = TrainNB0(train_data)
-    p = []
-    for i in range(10):
-        p.append(sum(np.array(test_vec) * p_vec[i]) + np.log(p_ab[i]))
-    return p.index(max(p))
-
-
-#测试
-test_x,test_y = zip(*test_data)
-test_x = np.array(test_x)
-test_y = np.array(test_y)
-
-pre_y = []
-for i in range(test_x.shape[0]):
-    pre_y.append(ClassifyNB(test_x[i]))
-
-pre_y = np.array(pre_y)
-print('accuracy: ', sum(pre_y == test_y) / test_x.shape[0])
+#shuffle(data2)
+#train_data2 = data2[:6947]   #6947 条训练数据
+#test_data2 = data2[6947:]    #3000 条测试数据
+#
+#print('-----------------------sentiment_value---------------')
+#print('BernoulliNB`s accuracy is %f'  %Score(BernoulliNB(), train_data2, test_data2))
+#print('MultinomiaNB`s accuracy is %f'  %Score(MultinomialNB(), train_data2, test_data2))
+#print('LogisticRegression`s accuracy is  %f' %Score(LogisticRegression(), train_data2, test_data2))
+#print('SVC`s accuracy is %f'  %Score(SVC(),train_data2, test_data2))
+#print('LinearSVC`s accuracy is %f'  %Score(LinearSVC(), train_data2, test_data2))
 
 
-        
-    
+
+##开始预测比赛测试数据
+#test_df = pd.read_csv('test_public.csv')  #比赛需要预测的数据
+#test_df['subject'] = 0
+#test_df['sentiment_value'] = 0
+#test_data_sub = GetData(test_df, word_list,sub_list)
+#test_data_value = GetValueData(test_data_sub, test_df)
+#
+##print(test_data_sub[0], test_data_value[0], sep = '\n')
+##data  和  data2 分别为 test_data_sub,test_data_value的训练数据
+##一个获取预测结果的预测函数
+#def Predict(classifier, train_data, test_data):
+#    test_x, test_y = zip(*test_data)
+#    classifier = SklearnClassifier(classifier)
+#    classifier.train(train_data) #训练分类器
+#    pred = classifier.classify_many(test_x) #给出预测结果
+#    return pred
+#
+#pre_sub = Predict(LogisticRegression(), data, test_data_sub)
+#data2 = GetValueData(data, df)  #防止data因data2的改变而改变
+#pre_value = Predict(LogisticRegression(), data2, test_data_value)
+#
+##print(pre_sub[:20], pre_value[:20])
+#
+#d = dict(zip(range(10), sub_list))
+#f = lambda x:d.get(x,x)
+#test_df['subject'] = pre_sub
+#test_df['subject'] = test_df['subject'].map(f)
+#test_df['sentiment_value'] = pre_value
+##
+#test_df.to_csv('pre_data.csv')
+#
+
+
 
